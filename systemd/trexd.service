@@ -1,0 +1,14 @@
+[Unit]
+Description=A tiny reverse proxy daemon
+Wants=network.target
+
+[Service]
+Type=forking
+PIDFile=/run/trexd.pid
+ExecStart=/bin/trexd -d -c /etc/trexd/config.conf
+ExecReload=kill -QUIT $MAINPID
+ExecReload=/bin/trexd -u -d -c /etc/trexd/config.conf
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
