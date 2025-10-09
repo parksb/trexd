@@ -1,9 +1,10 @@
-name: release binary
+name: build binary
 
 on:
   push:
     tags:
       - 'v*.*.*'
+
 jobs:
   build:
     runs-on: ubuntu-22.04
