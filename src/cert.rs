@@ -1,19 +1,27 @@
 use async_trait::async_trait;
 use log::{info, warn};
-use pingora::tls::ext;
-use pingora::tls::pkey::{PKey, Private};
-use pingora::tls::x509::X509;
 use pingora::{
     listeners::TlsAccept,
-    tls::ssl::{NameType, SslRef},
+    tls::{
+        pkey::{PKey, Private},
+        ssl::{NameType, SslRef},
+        x509::X509,
+    },
 };
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::app::App;
 
+pub struct TlsMaterial {
+    leaf: X509,
+    chain: Vec<X509>,
+    key: PKey<Private>,
+}
+
 pub struct DynamicCert {
-    registry: HashMap<String, (Vec<X509>, PKey<Private>)>,
+    registry: HashMap<String, Arc<TlsMaterial>>,
 }
 
 impl DynamicCert {
@@ -23,26 +31,28 @@ impl DynamicCert {
         for app in configs.into_iter().filter(|a| a.tls.is_some()) {
             let tls = app.tls.unwrap();
 
-            info!(
-                "Loading TLS key and cert from {}, {}",
-                tls.cert_path, tls.key_path
+            info!("Loading TLS for host={}", app.hostname);
+
+            let cert_bytes = std::fs::read(&tls.cert_path).expect("read fullchain failed");
+
+            let mut certs = X509::stack_from_pem(&cert_bytes).expect("parse fullchain failed");
+
+            assert!(
+                !certs.is_empty(),
+                "fullchain must contain at least one cert"
             );
 
-            let cert_bytes =
-                std::fs::read(&tls.cert_path).expect("Failed to read certificate file");
+            let leaf = certs.remove(0);
+            let chain = certs;
 
-            let cert_chain =
-                X509::stack_from_pem(&cert_bytes).expect("Failed to parse fullchain.pem");
+            let key_bytes = std::fs::read(&tls.key_path).expect("read privkey failed");
 
-            if cert_chain.is_empty() {
-                panic!("Certificate chain is empty");
-            }
+            let key = PKey::private_key_from_pem(&key_bytes).expect("parse key failed");
 
-            let key_bytes = std::fs::read(&tls.key_path).expect("Failed to read private key file");
-
-            let key = PKey::private_key_from_pem(&key_bytes).expect("Failed to parse private key");
-
-            registry.insert(app.hostname.to_ascii_lowercase(), (cert_chain, key));
+            registry.insert(
+                app.hostname.to_ascii_lowercase(),
+                Arc::new(TlsMaterial { leaf, chain, key }),
+            );
         }
 
         Self { registry }
@@ -55,21 +65,31 @@ impl TlsAccept for DynamicCert {
         let sni = match ssl.servername(NameType::HOST_NAME) {
             Some(name) => name.to_ascii_lowercase(),
             None => {
-                warn!("TLS handshake without SNI");
+                warn!("Handshake without SNI");
                 return;
             }
         };
 
-        if let Some((cert_chain, key)) = self.registry.get(&sni) {
-            ext::ssl_use_certificate(ssl, &cert_chain[0]).expect("Failed to set leaf certificate");
+        let Some(material) = self.registry.get(&sni) else {
+            warn!("No TLS cert for {}", sni);
+            return;
+        };
 
-            ext::ssl_use_private_key(ssl, key).expect("Failed to set private key");
+        if let Err(e) = ssl.set_certificate(&material.leaf) {
+            warn!("set_certificate failed: {}", e);
+            return;
+        }
 
-            for cert in cert_chain.iter().skip(1) {
-                ext::ssl_add_chain_cert(ssl, cert).expect("Failed to add intermediate cert");
+        if let Err(e) = ssl.set_private_key(&material.key) {
+            warn!("set_private_key failed: {}", e);
+            return;
+        }
+
+        for cert in &material.chain {
+            if let Err(e) = ssl.add_chain_cert(cert.clone()) {
+                warn!("add_chain_cert failed: {}", e);
+                return;
             }
-        } else {
-            warn!("No certificate found for SNI: {}", sni);
         }
     }
 }
