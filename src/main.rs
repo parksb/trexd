@@ -2,6 +2,7 @@ use ::http::header;
 use async_trait::async_trait;
 use log::{info, warn};
 use pingora::{
+    http::RequestHeader,
     listeners::tls::TlsSettings,
     prelude::{HttpPeer, Opt, ProxyHttp},
     proxy::{http_proxy_service, Session},
@@ -51,6 +52,43 @@ impl ProxyHttp for ProxyConfig {
                 Err(Error::new(ErrorType::HTTPStatus(404)))
             }
         }
+    }
+
+    async fn upstream_request_filter(
+        &self,
+        session: &mut Session,
+        upstream_request: &mut RequestHeader,
+        _ctx: &mut Self::CTX,
+    ) -> Result<()> {
+        let client_ip = session
+            .client_addr()
+            .and_then(|addr| addr.as_inet())
+            .map(|addr| addr.ip().to_string())
+            .unwrap_or("unknown".to_string());
+
+        let forwarded_for = upstream_request
+            .headers
+            .get("X-Forwarded-For")
+            .and_then(|v| v.to_str().ok())
+            .map(|existing| format!("{}, {}", existing, client_ip))
+            .unwrap_or(client_ip);
+
+        upstream_request.insert_header("X-Forwarded-For", &forwarded_for)?;
+
+        if !upstream_request.headers.contains_key("X-Forwarded-Host") {
+            let host = session
+                .get_header(header::HOST)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+
+            upstream_request.insert_header("X-Forwarded-Host", host)?;
+        }
+
+        if !upstream_request.headers.contains_key("X-Forwarded-Proto") {
+            upstream_request.insert_header("X-Forwarded-Proto", "https")?;
+        }
+
+        Ok(())
     }
 }
 
