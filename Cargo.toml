@@ -1,7 +1,13 @@
 [package]
 name = "trexd"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
+description = "A tiny reverse proxy daemon"
+repository = "https://github.com/parksb/trexd"
+license = "MIT"
+keywords = ["proxy", "reverse-proxy", "daemon"]
+categories = ["network-programming", "command-line-utilities"]
+exclude = ["systemd/", ".github/", "Dockerfile"]
 
 [dependencies]
 async-trait = "^0.1"
