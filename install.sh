@@ -4,7 +4,7 @@ set -eu
 INSTALL_DIR=${INSTALL_DIR:-/usr/local/bin}
 
 repository=https://github.com/parksb/trexd
-asset=trexd-aarch64-unknown-linux-gnu
+asset=
 work_dir=
 staged_binary=
 
@@ -23,8 +23,8 @@ is_version() {
 }
 
 check_requirements() {
-  if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != aarch64 ]; then
-    fail "Only ARM64 Linux is supported."
+  if [ "$(uname -s)" != Linux ]; then
+    fail "Only Linux is supported."
   fi
 
   if [ "$(id -u)" -ne 0 ]; then
@@ -45,6 +45,22 @@ check_requirements() {
   if [ "$(getconf LONG_BIT)" != 64 ]; then
     fail "A 64-bit operating system is required."
   fi
+}
+
+detect_target() {
+  architecture=$(uname -m)
+
+  case "$architecture" in
+    x86_64|amd64)
+      echo x86_64-unknown-linux-gnu
+      ;;
+    aarch64|arm64)
+      echo aarch64-unknown-linux-gnu
+      ;;
+    *)
+      fail "Unsupported architecture: $architecture"
+      ;;
+  esac
 }
 
 curl_https() {
@@ -135,6 +151,9 @@ main() {
   fi
 
   check_requirements
+
+  target=$(detect_target)
+  asset=trexd-$target
 
   work_dir=$(mktemp -d)
   trap cleanup 0

@@ -5,34 +5,67 @@ on:
     tags:
       - 'v*.*.*'
 
+permissions:
+  contents: read
+
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      TARGET: ${{ matrix.target }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
       - name: Set up toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-          rustup target add aarch64-unknown-linux-gnu
+          sudo apt-get install -y build-essential cmake pkg-config
+          rustup target add "$TARGET"
       - name: Build binary
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        run: cargo build --locked --target aarch64-unknown-linux-gnu --release
+        run: cargo build --locked --target "$TARGET" --release
+      - name: Check binary
+        run: target/"$TARGET"/release/trexd --help
+      - name: Prepare binary
+        run: cp target/"$TARGET"/release/trexd "trexd-$TARGET"
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: trexd-${{ matrix.target }}
+          path: trexd-${{ matrix.target }}
+          if-no-files-found: error
+          overwrite: true
+
+  release:
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: trexd-*
+          path: release
+          merge-multiple: true
       - name: Prepare release files
         run: |
-          mkdir release
-          cp target/aarch64-unknown-linux-gnu/release/trexd release/trexd-aarch64-unknown-linux-gnu
           cp install.sh release/
           cd release || exit 1
-          sha256sum trexd-aarch64-unknown-linux-gnu > SHA256SUMS
+          sha256sum trexd-*-unknown-linux-gnu > SHA256SUMS
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
