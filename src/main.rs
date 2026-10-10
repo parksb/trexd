@@ -7,8 +7,9 @@ use pingora::{
     listeners::tls::TlsSettings,
     prelude::{HttpPeer, Opt, ProxyHttp},
     protocols::http::v2::server::default_h2_options,
-    proxy::{http_proxy_service, Session},
+    proxy::{HttpProxy, Session},
     server::Server,
+    services::listening::Service,
     Error, ErrorType, Result,
 };
 use std::{collections::HashMap, env, net::IpAddr, sync::Arc, time::Duration};
@@ -16,10 +17,12 @@ use std::{collections::HashMap, env, net::IpAddr, sync::Arc, time::Duration};
 pub mod app;
 pub mod cert;
 mod security;
+mod timeout;
 
 use app::App;
 use cert::DynamicCert;
 use security::{normalize_host, request_host, validate_request};
+use timeout::{BodyTimeout, TimedProxy};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 pub struct ProxyConfig {
@@ -33,6 +36,7 @@ pub struct RequestContext {
     client_ip: Option<IpAddr>,
     forwarded_host: String,
     permit: Option<OwnedSemaphorePermit>,
+    body_timeout: Option<BodyTimeout>,
 }
 
 fn reject(status: u16) -> Box<Error> {
@@ -83,11 +87,31 @@ impl ProxyHttp for ProxyConfig {
                 .map_err(|_| reject(503))?,
         );
 
+        if session.as_http2().is_some() && !session.is_body_done() {
+            ctx.body_timeout = Some(BodyTimeout::start(Duration::from_secs(app.timeouts.io)));
+        }
+
         session.set_read_timeout(Some(Duration::from_secs(app.timeouts.io)));
         session.set_write_timeout(Some(Duration::from_secs(app.timeouts.io)));
         session.set_keepalive(Some(app.timeouts.idle));
 
         Ok(false)
+    }
+
+    async fn request_body_filter(
+        &self,
+        _session: &mut Session,
+        body: &mut Option<bytes::Bytes>,
+        end_of_stream: bool,
+        ctx: &mut Self::CTX,
+    ) -> Result<()> {
+        if let Some(timeout) = &ctx.body_timeout {
+            if end_of_stream || body.as_ref().is_some_and(|data| !data.is_empty()) {
+                timeout.progress(end_of_stream);
+            }
+        }
+
+        Ok(())
     }
 
     async fn upstream_peer(
@@ -169,24 +193,30 @@ fn main() {
     let mut server = Server::new(Some(options)).unwrap();
     server.bootstrap();
 
-    let mut service = http_proxy_service(
-        &server.configuration,
+    let mut proxy = HttpProxy::new(
         ProxyConfig {
             registry,
             requests: Arc::new(Semaphore::new(128)),
         },
+        server.configuration.clone(),
     );
 
-    let proxy = service.app_logic_mut().unwrap();
-    let mut options = HttpServerOptions::default();
+    proxy.handle_init_modules();
 
+    let mut options = HttpServerOptions::default();
     options.keepalive_request_limit = Some(1000);
     options.h2_idle_timeout = Some(Duration::from_secs(15));
+
     proxy.server_options = Some(options);
 
     let mut h2 = default_h2_options();
     h2.max_header_list_size(16_384).max_concurrent_streams(32);
     proxy.h2_options = Some(h2);
+
+    let mut service = Service::new(
+        "Pingora HTTP Proxy Service".into(),
+        TimedProxy(Arc::new(proxy)),
+    );
 
     let dynamic_cert = DynamicCert::new(apps);
     let mut tls_settings = TlsSettings::with_callbacks(Box::new(dynamic_cert)).unwrap();
