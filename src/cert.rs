@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::app::App;
+use crate::security::normalize_host;
 
 pub struct TlsMaterial {
     leaf: X509,
@@ -50,7 +51,7 @@ impl DynamicCert {
             let key = PKey::private_key_from_pem(&key_bytes).expect("parse key failed");
 
             registry.insert(
-                app.hostname.to_ascii_lowercase(),
+                normalize_host(&app.hostname).expect("Invalid configured hostname"),
                 Arc::new(TlsMaterial { leaf, chain, key }),
             );
         }
@@ -62,8 +63,8 @@ impl DynamicCert {
 #[async_trait]
 impl TlsAccept for DynamicCert {
     async fn certificate_callback(&self, ssl: &mut SslRef) {
-        let sni = match ssl.servername(NameType::HOST_NAME) {
-            Some(name) => name.to_ascii_lowercase(),
+        let sni = match ssl.servername(NameType::HOST_NAME).and_then(normalize_host) {
+            Some(name) => name,
             None => {
                 warn!("Handshake without SNI");
                 return;

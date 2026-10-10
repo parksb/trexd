@@ -17,7 +17,7 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
     else \
         TARGET=x86_64-unknown-linux-musl; \
     fi && \
-    cargo build --release --target $TARGET && \
+    cargo build --locked --release --target $TARGET && \
     cp /app/target/$TARGET/release/trexd /app/trexd
 
 FROM gcr.io/distroless/static:nonroot
@@ -27,4 +27,4 @@ COPY --from=builder /app/trexd /usr/local/bin/trexd
 USER nonroot
 
 ENTRYPOINT ["/usr/local/bin/trexd"]
-CMD ["trexd", "-d"]
+CMD []
