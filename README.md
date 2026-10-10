@@ -3,6 +3,12 @@
 A tiny reverse proxy daemon.
 
 ```sh
+curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL https://github.com/parksb/trexd/releases/latest/download/install.sh | sudo sh
+```
+
+## configuration
+
+```sh
 $ mkdir -p /etc/trexd
 $ cat > /etc/trexd/apps.json <<EOF
 [

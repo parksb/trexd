@@ -5,9 +5,9 @@ Wants=network.target
 [Service]
 Type=forking
 PIDFile=/run/trexd.pid
-ExecStart=/bin/trexd -d -c /etc/trexd/config.conf
+ExecStart=/usr/local/bin/trexd -d -c /etc/trexd/config.conf
 ExecReload=kill -QUIT $MAINPID
-ExecReload=/bin/trexd -u -d -c /etc/trexd/config.conf
+ExecReload=/usr/local/bin/trexd -u -d -c /etc/trexd/config.conf
 Restart=on-failure
 
 [Install]
